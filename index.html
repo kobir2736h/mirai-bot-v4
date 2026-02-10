@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Dashboard</title>
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background-color: #161b22;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            width: 450px;
+            text-align: center;
+            border: 1px solid #30363d;
+        }
+        h2 { color: #58a6ff; margin-bottom: 20px; }
+        
+        /* Input Area */
+        textarea {
+            width: 100%;
+            height: 150px;
+            background-color: #0d1117;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            border-radius: 6px;
+            padding: 10px;
+            box-sizing: border-box;
+            resize: none;
+            font-size: 12px;
+            font-family: monospace;
+        }
+        textarea:focus { outline: 1px solid #58a6ff; }
+
+        /* Buttons */
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 15px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .btn-start { background-color: #238636; color: white; }
+        .btn-start:hover { background-color: #2ea043; }
+        
+        .btn-reset { background-color: #da3633; color: white; margin-top: 10px; display: none;}
+        .btn-reset:hover { background-color: #f85149; }
+
+        /* Progress Bar */
+        .progress-container {
+            margin-top: 20px;
+            background-color: #30363d;
+            border-radius: 10px;
+            height: 20px;
+            width: 100%;
+            overflow: hidden;
+            display: none;
+        }
+        .progress-bar {
+            background-color: #58a6ff;
+            height: 100%;
+            width: 0%;
+            transition: width 0.5s ease;
+        }
+        .status-text {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #8b949e;
+            min-height: 20px;
+        }
+
+        /* Success Animation */
+        .success-icon {
+            font-size: 50px;
+            color: #238636;
+            display: none;
+            margin-bottom: 10px;
+            animation: pop 0.5s ease;
+        }
+        @keyframes pop { 0% { transform: scale(0); } 100% { transform: scale(1); } }
+        
+        /* Loader for initial check */
+        .loading-overlay {
+            display: none; /* Initially hidden */
+            font-size: 14px;
+            color: #8b949e;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- Login Section -->
+    <div id="loginSection">
+        <h2>🤖 Bot Control Panel</h2>
+        <p style="font-size: 13px; color: #8b949e;">Paste your AppState JSON below to start</p>
+        <textarea id="appState" placeholder='[{"key": "c_user", "value": "..."}]'></textarea>
+        <button class="btn-start" onclick="startBot()">🚀 Start Bot</button>
+    </div>
+
+    <!-- Monitor/Success Section -->
+    <div id="monitorSection" style="display: none;">
+        <div class="success-icon" id="successIcon">✔</div>
+        <h3 id="mainStatus">Initializing...</h3>
+        
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar" id="progressBar"></div>
+        </div>
+        
+        <p class="status-text" id="statusMsg">Connecting to server...</p>
+        <button class="btn-reset" id="resetBtn" onclick="resetBot()">Stop & New Login</button>
+    </div>
+</div>
+
+<script>
+    let intervalId = null;
+
+    // ১. পেজ লোড হওয়ার সাথে সাথেই চেক করবে বট রানিং কিনা
+    window.onload = function() {
+        checkStatus(); 
+        // প্রতি ২ সেকেন্ড পর পর চেক করতেই থাকবে
+        intervalId = setInterval(checkStatus, 2000);
+    };
+
+    async function startBot() {
+        const appState = document.getElementById('appState').value;
+        if (!appState) return alert("Please paste AppState JSON first!");
+
+        try {
+            JSON.parse(appState); 
+        } catch (e) {
+            return alert("Invalid JSON format! Please copy cookies correctly.");
+        }
+
+        // UI চেঞ্জ করে দেওয়া
+        document.getElementById('loginSection').style.display = 'none';
+        document.getElementById('monitorSection').style.display = 'block';
+        document.getElementById('progressContainer').style.display = 'block';
+
+        // ডাটা পাঠানো
+        await fetch('/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appState: appState })
+        });
+        
+        // এখন দ্রুত চেক করা শুরু করো
+        checkStatus();
+    }
+
+    async function checkStatus() {
+        try {
+            const response = await fetch('/status');
+            const data = await response.json();
+
+            const progressBar = document.getElementById('progressBar');
+            const statusMsg = document.getElementById('statusMsg');
+            const mainStatus = document.getElementById('mainStatus');
+            const loginSection = document.getElementById('loginSection');
+            const monitorSection = document.getElementById('monitorSection');
+
+            // যদি বট ১০০% রানিং থাকে
+            if (data.percent === 100) {
+                // লগইন পেজ লুকাও, সাকসেস পেজ দেখাও
+                if (loginSection.style.display !== 'none') {
+                    loginSection.style.display = 'none';
+                    monitorSection.style.display = 'block';
+                }
+
+                mainStatus.innerText = "Bot is Active!";
+                mainStatus.style.color = "#238636";
+                statusMsg.innerText = data.message;
+                
+                document.getElementById('successIcon').style.display = 'block';
+                document.getElementById('progressContainer').style.display = 'none'; // বার দরকার নেই আর
+                document.getElementById('resetBtn').style.display = 'block';
+            }
+            // যদি বট লোডিং অবস্থায় থাকে (০ এর বেশি কিন্তু ১০০ এর কম)
+            else if (data.percent > 0 && data.percent < 100) {
+                loginSection.style.display = 'none';
+                monitorSection.style.display = 'block';
+                document.getElementById('progressContainer').style.display = 'block';
+                
+                progressBar.style.width = data.percent + '%';
+                statusMsg.innerText = data.message;
+                mainStatus.innerText = `Starting... ${data.percent}%`;
+            }
+            // যদি বট বন্ধ থাকে বা এরর খায়
+            else if (data.percent === 0 && data.message.includes("Failed")) {
+                loginSection.style.display = 'none';
+                monitorSection.style.display = 'block';
+                mainStatus.innerText = "Login Failed!";
+                mainStatus.style.color = "#da3633";
+                statusMsg.innerText = data.message;
+                document.getElementById('resetBtn').style.display = 'block';
+            }
+            // যদি বট একদমই চালু না থাকে (Waiting...)
+            else if (data.percent === 0) {
+                // তাহলে লগইন পেজটাই দেখাও
+                monitorSection.style.display = 'none';
+                loginSection.style.display = 'block';
+            }
+
+        } catch (error) {
+            console.error("Connection error, server might be sleeping.");
+        }
+    }
+
+    async function resetBot() {
+        if (!confirm("Are you sure you want to stop the bot?")) return;
+        
+        // সার্ভারে থামানোর রিকোয়েস্ট
+        await fetch('/reset', { method: 'POST' });
+        
+        // পেজ রিলোড দাও যাতে আবার লগইন ফর্ম আসে
+        setTimeout(() => {
+            location.reload();
+        }, 1000);
+    }
+</script>
+
+</body>
+</html>
