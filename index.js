@@ -1,24 +1,31 @@
 const express = require('express');
 const path = require('path');
-const login = require("fca-priyansh");
-const fs = require("fs-extra");
+const { join, resolve } = require("path"); // এটি সবার উপরে থাকতে হবে
 const { readdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } = require("fs-extra");
-const { join } = require("path");
-const { execSync } = require('child_process');
+const login = require("fca-priyansh");
 const moment = require("moment-timezone");
+const { execSync } = require('child_process');
 const logger = require("./utils/log.js");
-const { Sequelize, sequelize } = require("./includes/database");
 
-// Dependencies info
-const listPackage = JSON.parse(readFileSync('./package.json')).dependencies;
-const listbuiltinModules = require("module").builtinModules;
+// Database dependencies handled later or strictly here
+const { Sequelize, sequelize } = require("./includes/database");
 
 const app = express();
 const port = process.env.PORT || 8080;
 
 // ====================================================
-// 1. GLOBAL VARIABLES SETUP (একবারই রান হবে)
+// 1. GLOBAL VARIABLES SETUP
 // ====================================================
+
+// আগে প্যাকেজ লিস্ট লোড করে নিচ্ছি যাতে পরে সমস্যা না হয়
+let listPackage = {};
+let listbuiltinModules = [];
+try {
+    listPackage = JSON.parse(readFileSync('./package.json')).dependencies;
+    listbuiltinModules = require("module").builtinModules;
+} catch (e) {
+    // package.json না থাকলে এরর এড়ানোর জন্য
+}
 
 global.whitelistUser = new Set();
 global.whitelistThread = new Set();
@@ -34,7 +41,7 @@ global.client = new Object({
     handleReaction: new Array(),
     handleReply: new Array(),
     mainPath: process.cwd(),
-    configPath: join(process.cwd(), "config.json"),
+    configPath: join(process.cwd(), "config.json"), // এখন join কাজ করবে
     getTime: function (option) {
         switch (option) {
             case "seconds": return `${moment.tz("Asia/Kolkata").format("ss")}`;
@@ -74,7 +81,7 @@ global.language = new Object();
 let assetsLoaded = false;
 
 function loadSystemAssets() {
-    if (assetsLoaded) return; // যদি আগে লোড হয়ে থাকে, তবে আবার লোড করবে না
+    if (assetsLoaded) return;
     logger.loader("Initializing System Assets...");
 
     // A. Load Config
@@ -83,12 +90,23 @@ function loadSystemAssets() {
         logger.loader("Found file config: config.json");
         for (const key in configValue) global.config[key] = configValue[key];
     } catch {
-        logger.loader("Config file not found or invalid!", "error");
+        if (existsSync(global.client.configPath.replace(/\.json/g,"") + ".temp")) {
+            configValue = readFileSync(global.client.configPath.replace(/\.json/g,"") + ".temp");
+            configValue = JSON.parse(configValue);
+            for (const key in configValue) global.config[key] = configValue[key];
+        } else {
+            logger.loader("Config file not found!", "error");
+        }
     }
+
+    // Safety: Ensure arrays exist
+    if (!global.config.commandDisabled) global.config.commandDisabled = [];
+    if (!global.config.eventDisabled) global.config.eventDisabled = [];
 
     // B. Load Language
     try {
-        const langFile = (readFileSync(`${__dirname}/languages/${global.config.language || "en"}.lang`, { encoding: 'utf-8' })).split(/\r?\n|\r/);
+        const langPath = `${__dirname}/languages/${global.config.language || "en"}.lang`;
+        const langFile = (readFileSync(langPath, { encoding: 'utf-8' })).split(/\r?\n|\r/);
         const langData = langFile.filter(item => item.indexOf('#') != 0 && item != '');
         for (const item of langData) {
             const getSeparator = item.indexOf('=');
@@ -103,7 +121,7 @@ function loadSystemAssets() {
         
         global.getText = function (...args) {
             const langText = global.language;
-            if (!langText.hasOwnProperty(args[0])) throw `${__filename} - Not found key language: ${args[0]}`;
+            if (!langText.hasOwnProperty(args[0])) return "Language Key Missing";
             var text = langText[args[0]][args[1]];
             for (var i = args.length - 1; i > 0; i--) {
                 const regEx = RegExp(`%${i}`, 'g');
@@ -112,74 +130,81 @@ function loadSystemAssets() {
             return text;
         }
     } catch (e) {
-        logger.loader("Language file error: " + e.message, "error");
+        logger.loader("Language load error: " + e.message, "error");
     }
 
     // C. Load Commands (Only Requires, No execution of onLoad yet)
-    const listCommand = readdirSync(global.client.mainPath + '/Priyansh/commands').filter(command => command.endsWith('.js') && !command.includes('example') && !global.config.commandDisabled.includes(command));
-    
-    for (const command of listCommand) {
-        try {
-            var module = require(global.client.mainPath + '/Priyansh/commands/' + command);
-            if (!module.config || !module.run || !module.config.commandCategory) continue;
-            
-            // Dependencies Install Check
-            if (module.config.dependencies) {
-                for (const reqDependencies in module.config.dependencies) {
-                    const reqDependenciesPath = join(__dirname, 'nodemodules', 'node_modules', reqDependencies);
-                    try {
-                        if (!global.nodemodule.hasOwnProperty(reqDependencies)) {
-                            if (listPackage.hasOwnProperty(reqDependencies) || listbuiltinModules.includes(reqDependencies)) global.nodemodule[reqDependencies] = require(reqDependencies);
-                            else global.nodemodule[reqDependencies] = require(reqDependenciesPath);
-                        }
-                    } catch {
-                        // Silent install if missing
+    try {
+        const listCommand = readdirSync(global.client.mainPath + '/Priyansh/commands').filter(command => command.endsWith('.js') && !command.includes('example') && !global.config.commandDisabled.includes(command));
+        
+        for (const command of listCommand) {
+            try {
+                var module = require(global.client.mainPath + '/Priyansh/commands/' + command);
+                if (!module.config || !module.run || !module.config.commandCategory) continue;
+                
+                // Dependencies Install Check
+                if (module.config.dependencies) {
+                    for (const reqDependencies in module.config.dependencies) {
+                        const reqDependenciesPath = join(__dirname, 'nodemodules', 'node_modules', reqDependencies);
                         try {
-                            execSync('npm --package-lock false --save install ' + reqDependencies, { 'stdio': 'inherit', 'env': process['env'], 'shell': true, 'cwd': join(__dirname, 'nodemodules') });
-                            require['cache'] = {};
-                            global['nodemodule'][reqDependencies] = require(reqDependencies);
-                        } catch(e) { /* ignore install errors */ }
+                            if (!global.nodemodule.hasOwnProperty(reqDependencies)) {
+                                if (listPackage.hasOwnProperty(reqDependencies) || listbuiltinModules.includes(reqDependencies)) global.nodemodule[reqDependencies] = require(reqDependencies);
+                                else global.nodemodule[reqDependencies] = require(reqDependenciesPath);
+                            }
+                        } catch {
+                            // Silent install
+                            try {
+                                execSync('npm --package-lock false --save install ' + reqDependencies, { 'stdio': 'inherit', 'env': process['env'], 'shell': true, 'cwd': join(__dirname, 'nodemodules') });
+                                require['cache'] = {};
+                                global['nodemodule'][reqDependencies] = require(reqDependencies);
+                            } catch(e) {}
+                        }
                     }
                 }
-            }
 
-            // Config Loading
-            if (module.config.envConfig) {
-                for (const envConfig in module.config.envConfig) {
-                    if (typeof global.configModule[module.config.name] == 'undefined') global.configModule[module.config.name] = {};
-                    if (typeof global.config[module.config.name] == 'undefined') global.config[module.config.name] = {};
-                    if (typeof global.config[module.config.name][envConfig] !== 'undefined') global['configModule'][module.config.name][envConfig] = global.config[module.config.name][envConfig];
-                    else global.configModule[module.config.name][envConfig] = module.config.envConfig[envConfig] || '';
-                    if (typeof global.config[module.config.name][envConfig] == 'undefined') global.config[module.config.name][envConfig] = module.config.envConfig[envConfig] || '';
+                if (module.config.envConfig) {
+                    for (const envConfig in module.config.envConfig) {
+                        if (typeof global.configModule[module.config.name] == 'undefined') global.configModule[module.config.name] = {};
+                        if (typeof global.config[module.config.name] == 'undefined') global.config[module.config.name] = {};
+                        if (typeof global.config[module.config.name][envConfig] !== 'undefined') global['configModule'][module.config.name][envConfig] = global.config[module.config.name][envConfig];
+                        else global.configModule[module.config.name][envConfig] = module.config.envConfig[envConfig] || '';
+                        if (typeof global.config[module.config.name][envConfig] == 'undefined') global.config[module.config.name][envConfig] = module.config.envConfig[envConfig] || '';
+                    }
                 }
-            }
 
-            if (module.handleEvent) global.client.eventRegistered.push(module.config.name);
-            global.client.commands.set(module.config.name, module);
-        } catch (error) {
-            logger.loader(`Failed to load command ${command}: ${error}`, 'error');
+                if (module.handleEvent) global.client.eventRegistered.push(module.config.name);
+                global.client.commands.set(module.config.name, module);
+            } catch (error) {
+                logger.loader(`Failed to load command ${command}: ${error}`, 'error');
+            }
         }
+        logger.loader(`Loaded ${global.client.commands.size} commands.`);
+    } catch (e) {
+        logger.loader("Command folder not found!", "error");
     }
-    logger.loader(`Loaded ${global.client.commands.size} commands.`);
 
     // D. Load Events
-    const events = readdirSync(global.client.mainPath + '/Priyansh/events').filter(event => event.endsWith('.js') && !global.config.eventDisabled.includes(event));
-    for (const ev of events) {
-        try {
-            var event = require(global.client.mainPath + '/Priyansh/events/' + ev);
-            if (!event.config || !event.run) continue;
-            global.client.events.set(event.config.name, event);
-        } catch (error) {
-            logger.loader(`Failed to load event ${ev}: ${error}`, 'error');
+    try {
+        const events = readdirSync(global.client.mainPath + '/Priyansh/events').filter(event => event.endsWith('.js') && !global.config.eventDisabled.includes(event));
+        for (const ev of events) {
+            try {
+                var event = require(global.client.mainPath + '/Priyansh/events/' + ev);
+                if (!event.config || !event.run) continue;
+                global.client.events.set(event.config.name, event);
+            } catch (error) {
+                logger.loader(`Failed to load event ${ev}: ${error}`, 'error');
+            }
         }
+        logger.loader(`Loaded ${global.client.events.size} events.`);
+    } catch (e) {
+        logger.loader("Event folder not found!", "error");
     }
-    logger.loader(`Loaded ${global.client.events.size} events.`);
 
     assetsLoaded = true;
     logger.loader("System Assets Initialization Complete!");
 }
 
-// Start loading assets immediately (Background Process)
+// Start loading assets immediately
 loadSystemAssets();
 
 // ====================================================
@@ -200,7 +225,6 @@ app.post('/login', (req, res) => {
     if (!appState) return res.status(400).send("No AppState");
     try {
         writeFileSync("appstate.json", appState, 'utf8');
-        // If assets aren't loaded yet (rare), load them now
         if (!assetsLoaded) loadSystemAssets();
         
         startBotRuntime(JSON.parse(appState));
@@ -265,25 +289,25 @@ async function startBotRuntime(appState) {
             global.client.api = api;
             api.setOptions(global.config.FCAOption);
 
-            // 3. Execute onLoad for Commands (Repeatable - needs new API)
+            // 3. Execute onLoad for Commands (Repeatable - using pre-loaded modules)
             updateStatus(70, "Initializing Commands...");
             for (const [name, module] of global.client.commands) {
                 if (module.onLoad) {
                     try {
                         module.onLoad({ api, models });
                     } catch (error) {
-                        logger.loader(`Error in onLoad for ${name}: ${error}`, 'error');
+                        logger.loader(`Error in onLoad for ${name}: ${error.message}`, 'error');
                     }
                 }
             }
 
-            // 4. Execute onLoad for Events (Repeatable - needs new API)
+            // 4. Execute onLoad for Events
             for (const [name, event] of global.client.events) {
                 if (event.onLoad) {
                     try {
                         event.onLoad({ api, models });
                     } catch (error) {
-                        logger.loader(`Error in onLoad for event ${name}: ${error}`, 'error');
+                        logger.loader(`Error in onLoad for event ${name}: ${error.message}`, 'error');
                     }
                 }
             }
@@ -313,4 +337,4 @@ async function startBotRuntime(appState) {
 // Keep server alive
 try { require("./ping")(); } catch {}
 
-process.on('unhandledRejection', (err) => logger("Unhandled Rejection: " + err, "error"));
+process.on('unhandledRejection', (err) => logger("Unhandled Rejection: " + err.message, "error"));
