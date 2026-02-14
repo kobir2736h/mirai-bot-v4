@@ -1,14 +1,11 @@
 const moment = require("moment-timezone");
 const { readdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, rm } = require("fs-extra");
 const { join, resolve } = require("path");
-const { execSync } = require('child_process');
 const logger = require("./utils/log.js");
 const axios = require("axios");
-const listPackage = JSON.parse(readFileSync('./package.json')).dependencies;
-const listbuiltinModules = require("module").builtinModules;
 
 // ====================================================
-// 1. GLOBAL VARIABLES SETUP (সবার আগে এটা করতে হবে)
+// 1. GLOBAL VARIABLES SETUP
 // ====================================================
 
 global.whitelistUser = new Set();
@@ -60,7 +57,7 @@ global.moduleData = new Array();
 global.language = new Object();
 
 // ====================================================
-// 2. LOAD CONFIGURATION (ডাটাবেস কল করার আগেই এটা করতে হবে)
+// 2. LOAD CONFIGURATION
 // ====================================================
 
 var configValue;
@@ -87,7 +84,7 @@ catch { logger.loader("Can't load file config!", "error") }
 writeFileSync(global.client.configPath + ".temp", JSON.stringify(global.config, null, 4), 'utf8');
 
 // ====================================================
-// 3. DATABASE IMPORT (কনফিগ লোড হওয়ার পরে এটা কল হচ্ছে)
+// 3. DATABASE IMPORT
 // ====================================================
 const { Sequelize, sequelize } = require("./includes/database");
 
@@ -148,24 +145,7 @@ module.exports = async function startPriyansh(api, updateStatus) {
                 if (!module.config || !module.run || !module.config.commandCategory) throw new Error(global.getText('priyansh', 'errorFormat'));
                 if (global.client.commands.has(module.config.name || '')) throw new Error(global.getText('priyansh', 'nameExist'));
                 
-                // Dependencies Logic
-                if (module.config.dependencies && typeof module.config.dependencies == 'object') {
-                    for (const reqDependencies in module.config.dependencies) {
-                        const reqDependenciesPath = join(__dirname, 'nodemodules', 'node_modules', reqDependencies);
-                        try {
-                            if (!global.nodemodule.hasOwnProperty(reqDependencies)) {
-                                if (listPackage.hasOwnProperty(reqDependencies) || listbuiltinModules.includes(reqDependencies)) global.nodemodule[reqDependencies] = require(reqDependencies);
-                                else global.nodemodule[reqDependencies] = require(reqDependenciesPath);
-                            }
-                        } catch {
-                            // Install Logic
-                            execSync('npm --package-lock false --save install ' + reqDependencies, { 'stdio': 'inherit', 'env': process['env'], 'shell': true, 'cwd': join(__dirname, 'nodemodules') });
-                            require['cache'] = {};
-                            global['nodemodule'][reqDependencies] = require(reqDependencies);
-                        }
-                    }
-                    logger.loader(global.getText('priyansh', 'loadedPackage', module.config.name));
-                }
+                // [REMOVED] Dependency auto-install logic was here
 
                 if (module.config.envConfig) {
                     try {
