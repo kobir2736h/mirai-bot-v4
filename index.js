@@ -7,8 +7,6 @@ const moment = require("moment-timezone");
 const { execSync } = require('child_process');
 const logger = require("./utils/log.js");
 
-// [FIXED] ডাটাবেস রিকোয়ার এখান থেকে সরিয়ে নিচে startBotRuntime এ নেওয়া হয়েছে
-
 const app = express();
 const port = process.env.PORT || 8080;
 
@@ -16,7 +14,7 @@ const port = process.env.PORT || 8080;
 // 1. GLOBAL VARIABLES SETUP
 // ====================================================
 
-// আগে প্যাকেজ লিস্ট লোড করে নিচ্ছি
+// Package list loading
 let listPackage = {};
 let listbuiltinModules = [];
 try {
@@ -24,9 +22,7 @@ try {
         listPackage = JSON.parse(readFileSync('./package.json')).dependencies;
     }
     listbuiltinModules = require("module").builtinModules;
-} catch (e) {
-    // package.json না থাকলে এরর এড়ানোর জন্য
-}
+} catch (e) {}
 
 global.whitelistUser = new Set();
 global.whitelistThread = new Set();
@@ -74,6 +70,8 @@ global.nodemodule = new Object();
 global.config = new Object();
 global.configModule = new Object();
 global.language = new Object();
+// [FIXED] এই লাইনটি মিসিং ছিল, তাই shortcut এরর দিচ্ছিল
+global.moduleData = new Array(); 
 
 // ====================================================
 // 2. ASSET LOADER FUNCTION
@@ -99,13 +97,11 @@ function loadSystemAssets() {
             logger.loader("Config file not found!", "error");
             return; 
         }
-
         for (const key in configValue) global.config[key] = configValue[key];
     } catch (e) {
         logger.loader("Config load error: " + e.message, "error");
     }
 
-    // Safety check
     if (!global.config.commandDisabled) global.config.commandDisabled = [];
     if (!global.config.eventDisabled) global.config.eventDisabled = [];
 
@@ -160,9 +156,7 @@ function loadSystemAssets() {
                                          global.nodemodule[reqDependencies] = require(reqPath);
                                     }
                                 }
-                            } catch {
-                                // Silent fail
-                            }
+                            } catch {}
                         }
                     }
 
@@ -178,9 +172,7 @@ function loadSystemAssets() {
 
                     if (module.handleEvent) global.client.eventRegistered.push(module.config.name);
                     global.client.commands.set(module.config.name, module);
-                } catch (error) {
-                    // Just skip failed commands
-                }
+                } catch (error) {}
             }
             logger.loader(`Loaded ${global.client.commands.size} commands.`);
         }
@@ -210,7 +202,6 @@ function loadSystemAssets() {
     logger.loader("System Assets Initialization Complete!");
 }
 
-// Start loading assets
 loadSystemAssets();
 
 // ====================================================
@@ -232,7 +223,6 @@ app.post('/login', (req, res) => {
     try {
         writeFileSync("appstate.json", appState, 'utf8');
         if (!assetsLoaded) loadSystemAssets();
-        
         startBotRuntime(JSON.parse(appState));
         res.send("Login started...");
     } catch (e) {
@@ -247,9 +237,7 @@ app.post('/reset', (req, res) => {
 
 app.listen(port, () => {
     logger(`Server running on port ${port}`, "[ SERVER ]");
-    if (existsSync("appstate.json")) {
-        try { unlinkSync("appstate.json"); } catch {}
-    }
+    if (existsSync("appstate.json")) { try { unlinkSync("appstate.json"); } catch {} }
 });
 
 // ====================================================
@@ -281,9 +269,7 @@ async function startBotRuntime(appState) {
         updateStatus(50, "Login Success! Connecting Database...");
 
         try {
-            // [FIXED] ডাটাবেস এখানে লোড হবে, কারণ এখন global.config রেডি আছে
             const { Sequelize, sequelize } = require("./includes/database");
-
             await sequelize.authenticate();
             const authentication = { Sequelize, sequelize };
             const models = require('./includes/database/model')(authentication);
@@ -295,13 +281,18 @@ async function startBotRuntime(appState) {
             updateStatus(70, "Initializing Commands...");
             for (const [name, module] of global.client.commands) {
                 if (module.onLoad) {
-                    try { module.onLoad({ api, models }); } catch (e) {}
+                    try { module.onLoad({ api, models }); } catch (e) {
+                        // Log error but don't crash
+                        logger.loader(`Error in onLoad for ${name}: ${e.message}`, 'error');
+                    }
                 }
             }
 
             for (const [name, event] of global.client.events) {
                 if (event.onLoad) {
-                    try { event.onLoad({ api, models }); } catch (e) {}
+                    try { event.onLoad({ api, models }); } catch (e) {
+                        logger.loader(`Error in onLoad for event ${name}: ${e.message}`, 'error');
+                    }
                 }
             }
 
