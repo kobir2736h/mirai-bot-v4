@@ -1,15 +1,11 @@
 const moment = require("moment-timezone");
 const { readdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, rm } = require("fs-extra");
 const { join, resolve } = require("path");
-const { execSync } = require('child_process');
+// const { execSync } = require('child_process'); // অটো ইনস্টল রিমুভ করা হয়েছে
 const logger = require("./utils/log.js");
 const axios = require("axios");
-const listPackage = JSON.parse(readFileSync('./package.json')).dependencies;
-const listbuiltinModules = require("module").builtinModules;
 
-
-// 1. GLOBAL VARIABLES SETUP 
-
+// 1. GLOBAL VARIABLES SETUP
 
 global.whitelistUser = new Set();
 global.whitelistThread = new Set();
@@ -26,7 +22,6 @@ global.client = new Object({
     handleReply: new Array(),
     mainPath: process.cwd(),
     configPath: new String(),
-    
 });
 
 global.data = new Object({
@@ -41,53 +36,45 @@ global.data = new Object({
 });
 
 global.utils = require("./utils");
-global.nodemodule = new Object();
+// global.nodemodule = new Object(); // এটি রিমুভ করা হয়েছে
 global.config = new Object();
 global.configModule = new Object();
 global.moduleData = new Array();
 global.language = new Object();
 
-
-
-// 2. LOAD CONFIGURATION 
-
-
+// 2. LOAD CONFIGURATION
 
 var configValue;
 try {
     global.client.configPath = join(global.client.mainPath, "config.json");
     configValue = require(global.client.configPath);
     logger.loader("Found file config: config.json");
-}
-catch {
-    if (existsSync(global.client.configPath.replace(/\.json/g,"") + ".temp")) {
-        configValue = readFileSync(global.client.configPath.replace(/\.json/g,"") + ".temp");
+} catch {
+    if (existsSync(global.client.configPath.replace(/\.json/g, "") + ".temp")) {
+        configValue = readFileSync(global.client.configPath.replace(/\.json/g, "") + ".temp");
         configValue = JSON.parse(configValue);
-        logger.loader(`Found: ${global.client.configPath.replace(/\.json/g,"") + ".temp"}`);
-    }
-    else logger.loader("config.json not found!", "error");
+        logger.loader(`Found: ${global.client.configPath.replace(/\.json/g, "") + ".temp"}`);
+    } else logger.loader("config.json not found!", "error");
 }
 
 try {
     for (const key in configValue) global.config[key] = configValue[key];
     logger.loader("Config Loaded!");
+} catch {
+    logger.loader("Can't load file config!", "error")
 }
-catch { logger.loader("Can't load file config!", "error") }
 
 writeFileSync(global.client.configPath + ".temp", JSON.stringify(global.config, null, 4), 'utf8');
 
-
-
-// 3. DATABASE IMPORT 
-
+// 3. DATABASE IMPORT
 
 const { Sequelize, sequelize } = require("./includes/database");
 
-
 // 4. LOAD LANGUAGE
 
-
-const langFile = (readFileSync(`${__dirname}/languages/${global.config.language || "en"}.lang`, { encoding: 'utf-8' })).split(/\r?\n|\r/);
+const langFile = (readFileSync(`${__dirname}/languages/${global.config.language || "en"}.lang`, {
+    encoding: 'utf-8'
+})).split(/\r?\n|\r/);
 const langData = langFile.filter(item => item.indexOf('#') != 0 && item != '');
 for (const item of langData) {
     const getSeparator = item.indexOf('=');
@@ -100,7 +87,7 @@ for (const item of langData) {
     global.language[head][key] = value;
 }
 
-global.getText = function (...args) {
+global.getText = function(...args) {
     const langText = global.language;
     if (!langText.hasOwnProperty(args[0])) throw `${__filename} - Not found key language: ${args[0]}`;
     var text = langText[args[0]][args[1]];
@@ -133,31 +120,28 @@ module.exports = async function startPriyansh(api, updateStatus) {
         // ৩. কমান্ড লোড
         updateStatus(70, "Loading Commands...");
         const listCommand = readdirSync(global.client.mainPath + '/Priyansh/commands').filter(command => command.endsWith('.js') && !command.includes('example') && !global.config.commandDisabled.includes(command));
-
+        
         for (const command of listCommand) {
             try {
                 var module = require(global.client.mainPath + '/Priyansh/commands/' + command);
                 if (!module.config || !module.run || !module.config.commandCategory) throw new Error(global.getText('priyansh', 'errorFormat'));
                 if (global.client.commands.has(module.config.name || '')) throw new Error(global.getText('priyansh', 'nameExist'));
 
-                // Dependencies Logic
+                // ==========================================================
+                // NEW DEPENDENCY CHECK (Warning System)
+                // ==========================================================
                 if (module.config.dependencies && typeof module.config.dependencies == 'object') {
-                    for (const reqDependencies in module.config.dependencies) {
-                        const reqDependenciesPath = join(__dirname, 'nodemodules', 'node_modules', reqDependencies);
+                    for (const reqDependency in module.config.dependencies) {
                         try {
-                            if (!global.nodemodule.hasOwnProperty(reqDependencies)) {
-                                if (listPackage.hasOwnProperty(reqDependencies) || listbuiltinModules.includes(reqDependencies)) global.nodemodule[reqDependencies] = require(reqDependencies);
-                                else global.nodemodule[reqDependencies] = require(reqDependenciesPath);
-                            }
-                        } catch {
-                            // Install Logic
-                            execSync('npm --package-lock false --save install ' + reqDependencies, { 'stdio': 'inherit', 'env': process['env'], 'shell': true, 'cwd': join(__dirname, 'nodemodules') });
-                            require['cache'] = {};
-                            global['nodemodule'][reqDependencies] = require(reqDependencies);
+                            // চেক করবে প্যাকেজটি ইনস্টল করা আছে কিনা
+                            require.resolve(reqDependency);
+                        } catch (err) {
+                            // যদি প্যাকেজ না থাকে, তাহলে ওয়ার্নিং দিবে (কিন্তু ক্র্যাশ করবে না)
+                            logger.loader(`Command '${module.config.name}' requires package '${reqDependency}' but it is missing! Please install it using: npm install ${reqDependency}`, "warn");
                         }
                     }
-                    logger.loader(global.getText('priyansh', 'loadedPackage', module.config.name));
                 }
+                // ==========================================================
 
                 if (module.config.envConfig) {
                     try {
@@ -168,7 +152,7 @@ module.exports = async function startPriyansh(api, updateStatus) {
                             else global.configModule[module.config.name][envConfig] = module.config.envConfig[envConfig] || '';
                             if (typeof global.config[module.config.name][envConfig] == 'undefined') global.config[module.config.name][envConfig] = module.config.envConfig[envConfig] || '';
                         }
-                        logger.loader(global.getText('priyansh', 'loadedConfig', module.config.name));
+                        // logger.loader(global.getText('priyansh', 'loadedConfig', module.config.name));
                     } catch (error) {
                         throw new Error(global.getText('priyansh', 'loadedConfig', module.config.name, JSON.stringify(error)));
                     }
@@ -176,7 +160,10 @@ module.exports = async function startPriyansh(api, updateStatus) {
 
                 if (module.onLoad) {
                     try {
-                        const moduleData = { api: api, models: models };
+                        const moduleData = {
+                            api: api,
+                            models: models
+                        };
                         module.onLoad(moduleData);
                     } catch (_0x20fd5f) {
                         throw new Error(global.getText('priyansh', 'cantOnload', module.config.name, JSON.stringify(_0x20fd5f)), 'error');
@@ -199,9 +186,11 @@ module.exports = async function startPriyansh(api, updateStatus) {
                 var event = require(global.client.mainPath + '/Priyansh/events/' + ev);
                 if (!event.config || !event.run) throw new Error(global.getText('priyansh', 'errorFormat'));
                 if (global.client.events.has(event.config.name) || '') throw new Error(global.getText('priyansh', 'nameExist'));
-
                 if (event.onLoad) try {
-                    const eventData = { api: api, models: models };
+                    const eventData = {
+                        api: api,
+                        models: models
+                    };
                     event.onLoad(eventData);
                 } catch (error) {
                     throw new Error(global.getText('priyansh', 'cantOnload', event.config.name, JSON.stringify(error)), 'error');
@@ -212,12 +201,14 @@ module.exports = async function startPriyansh(api, updateStatus) {
                 logger.loader(global.getText('priyansh', 'failLoadModule', event.config.name, error), 'error');
             }
         }
-
         logger.loader(global.getText('priyansh', 'finishLoadModule', global.client.commands.size, global.client.events.size));
 
         // ৫. লিসেনার চালু করা
         updateStatus(90, "Starting Listener...");
-        const listenerData = { api: api, models: models };
+        const listenerData = {
+            api: api,
+            models: models
+        };
         const listener = require('./includes/listen')(listenerData);
 
         function listenerCallback(error, message) {
@@ -226,11 +217,8 @@ module.exports = async function startPriyansh(api, updateStatus) {
             if (global.config.DeveloperMode == !![]) console.log(message);
             return listener(message);
         };
-
         global.handleListen = api.listenMqtt(listenerCallback);
-
         updateStatus(100, "Bot is Active & Running!");
-
 
     } catch (error) {
         updateStatus(0, "System Error: " + error.message);
